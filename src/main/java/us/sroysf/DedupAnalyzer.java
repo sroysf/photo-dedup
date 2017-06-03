@@ -17,6 +17,7 @@ public class DedupAnalyzer {
     private static final Logger log = LoggerFactory.getLogger(DedupAnalyzer.class);
     private Map<String, List<FileInfo>> fileDB;
     private List<FileInfo> tinyFiles;
+    private boolean deleteDuplicates;
 
     private Path root;
     private Set<String> mutablePaths;
@@ -26,6 +27,7 @@ public class DedupAnalyzer {
         this.fileDB = new HashMap<>();
         this.tinyFiles = new ArrayList<>();
         this.mutablePaths = new HashSet<>();
+        this.deleteDuplicates = deleteDuplicates;
 
         for (int i=0; i < mutableDirs.length; i++) {
             Path resolved = root.resolve(mutableDirs[i]);
@@ -34,6 +36,10 @@ public class DedupAnalyzer {
             }
             mutablePaths.add(resolved.toAbsolutePath().toString());
         }
+    }
+
+    public void setDeleteDuplicates(boolean deleteDuplicates) {
+        this.deleteDuplicates = deleteDuplicates;
     }
 
     public void analyze() throws IOException {
@@ -82,8 +88,37 @@ public class DedupAnalyzer {
                 dups.forEach(fileInfo -> {
                     System.out.println(String.format("%s [%d]", fileInfo.getPath(), fileInfo.getSize()));
                 });
+
+                deleteDuplicates(dups);
             }
         });
+    }
+
+    private void deleteDuplicates(List<FileInfo> dups) {
+        Collections.sort(dups, Comparator.comparing(o -> o.getPath().toAbsolutePath().toString()));
+        int numDeletes = 0;
+        for (FileInfo dup : dups) {
+            if (isMutablePath(dup.getPath())) {
+                System.out.printf("\tSuggested delete: %s\n", dup.getPath());
+
+                if (this.deleteDuplicates) {
+                    try {
+                        if (Files.exists(dup.getPath())) {
+                            Files.delete(dup.getPath());
+                            System.out.printf("\t\tFile deleted: %s\n", dup.getPath());
+                        }
+                    } catch (IOException e) {
+                        log.error("", e);
+                    }
+                }
+
+                numDeletes++;
+
+                if (numDeletes == (dups.size()-1)) {
+                    break;
+                }
+            }
+        }
     }
 
     private boolean containsMutablePath(List<FileInfo> dups) {

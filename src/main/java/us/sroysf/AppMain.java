@@ -26,6 +26,9 @@ public class AppMain {
             return;
         }
 
-        new DedupAnalyzer(path, "Inbox", "2016").analyze();
+        DedupAnalyzer dedup = new DedupAnalyzer(path, "Inbox");
+        dedup.setDeleteDuplicates(false);  // Set to true to perform actual deletes of duplicate files
+
+        dedup.analyze();
     }
 }
