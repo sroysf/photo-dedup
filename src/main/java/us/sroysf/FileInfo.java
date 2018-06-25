@@ -9,7 +9,7 @@ public class FileInfo {
     private long size;
     private Path path;
 
-    public FileInfo(Path path, long size) {
+    FileInfo(Path path, long size) {
         this.size = size;
         this.path = path;
     }
