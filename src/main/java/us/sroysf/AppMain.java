@@ -33,8 +33,8 @@ public class AppMain {
             .hasArg()
             .build();
 
-    private static final Option OPTION_MUTABLE_DIRS = Option.builder("m")
-            .longOpt("mutableDirs")
+    private static final Option OPTION_EDITABLE_DIRS = Option.builder("e")
+            .longOpt("editableDirs")
             .desc("directory where changes are allowed")
             .required(false)
             .hasArg()
@@ -48,19 +48,20 @@ public class AppMain {
             .hasArg()
             .build();
 
-    private static final Option OPTION_INTERACTIVE_MODE = Option.builder("i")
-            .longOpt("interactive")
-            .desc("interactive mode - ask which duplicates to delete")
-            .required(false)
+    private static final Option OPTION_MODE = Option.builder("m")
+            .longOpt("mode")
+            .desc("mode - how to handle duplicates: [PickFirst, InteractivePickFile, InteractivePickDirectory]")
+            .required(true)
+            .hasArg()
             .build();
 
     private static final Options options = new Options()
             .addOption(OPTION_HELP)
             .addOption(OPTION_DEBUG)
             .addOption(OPTION_TINY_FILES_SIZE)
-            .addOption(OPTION_MUTABLE_DIRS)
+            .addOption(OPTION_EDITABLE_DIRS)
             .addOption(OPTION_ROOT)
-            .addOption(OPTION_INTERACTIVE_MODE)
+            .addOption(OPTION_MODE)
             ;
 
     private final Runnable systemExitHandler;
@@ -81,37 +82,44 @@ public class AppMain {
         try {
             cmdLine = parser.parse(options, args);
         } catch (ParseException e) {
-            printHelpAndTerminate(options);
+            printHelpAndTerminate();
             return;
         }
 
         if (cmdLine.hasOption(OPTION_HELP.getOpt())) {
-            printHelpAndTerminate(options);
+            printHelpAndTerminate();
             return;
         }
 
         String photoDir = cmdLine.getOptionValue(OPTION_ROOT.getOpt());
-        String[] mutableDirs = cmdLine.getOptionValues(OPTION_MUTABLE_DIRS.getOpt());
+        String[] mutableDirs = cmdLine.getOptionValues(OPTION_EDITABLE_DIRS.getOpt());
         if (mutableDirs == null) {
             mutableDirs = new String[]{photoDir};
         }
         boolean debug = cmdLine.hasOption(OPTION_DEBUG.getOpt());
-        boolean interactive = cmdLine.hasOption(OPTION_INTERACTIVE_MODE.getOpt());
+        Mode mode;
+        try {
+            mode = Mode.valueOf(cmdLine.getOptionValue(OPTION_MODE.getOpt()));
+        } catch (IllegalArgumentException e) {
+            System.out.printf("\nInvalid mode: %s\n", cmdLine.getOptionValue(OPTION_MODE.getOpt()));
+            printHelpAndTerminate();
+            return;
+        }
         int tinyFilesSize = Integer.parseInt(cmdLine.getOptionValue(OPTION_TINY_FILES_SIZE.getOpt(), "0"));
         Path path = Paths.get(photoDir);
         if (!Files.exists(path) || !Files.isDirectory(path)) {
             System.out.printf("\nInvalid directory: %s\n", path);
-            printHelpAndTerminate(options);
+            printHelpAndTerminate();
             return;
         }
         // Set to true to perform actual deletes of duplicate files
-        DedupAnalyzer dedup = new DedupAnalyzer(path, debug, tinyFilesSize, interactive, mutableDirs);
+        DedupAnalyzer dedup = new DedupAnalyzer(path, debug, tinyFilesSize, mode, mutableDirs);
         dedup.analyze();
     }
 
-    private void printHelpAndTerminate(Options options) {
+    private void printHelpAndTerminate() {
         HelpFormatter formatter = new HelpFormatter();
-        formatter.printHelp("appmain", options);
+        formatter.printHelp("appmain", AppMain.options);
         systemExitHandler.run();
     }
 

@@ -5,16 +5,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static us.sroysf.Mode.InteractivePickDirectory;
 
 /**
  * Created by sroy on 2/24/17.
- * TODO: delete empty directories?
  */
-public class DedupAnalyzer {
+class DedupAnalyzer {
 
     private static final Logger log = LoggerFactory.getLogger(DedupAnalyzer.class);
 
@@ -24,9 +27,10 @@ public class DedupAnalyzer {
     private static final Set<String> DELETED_FILES = Sets.newSet(".picasa.ini", "Thumbs.db" /*, ".DS_Store"*/);
 
     private final Map<String, List<FileInfo>> fileDB = new TreeMap<>();
+    private final Map<Set<Path>, Set<FileInfo>> filesByCommonDirs = new HashMap<>();
     private final List<FileInfo> tinyFiles = new ArrayList<>();
     private final boolean debug;
-    private final boolean interactive;
+    private final Mode mode;
 
     private final Path root;
     private final int tinyFilesSize;
@@ -34,13 +38,17 @@ public class DedupAnalyzer {
 
     private long numberBytesDeleted;
 
-    DedupAnalyzer(Path root, boolean debug, int tinyFilesSize, boolean interactive, String... mutableDirs) throws IOException {
+    DedupAnalyzer(Path root, boolean debug, int tinyFilesSize, Mode mode, String... mutableDirs) throws IOException {
+        this(root, debug, tinyFilesSize, mode, new Scanner(System.in), mutableDirs);
+    }
+
+    DedupAnalyzer(Path root, boolean debug, int tinyFilesSize, Mode mode, Scanner scanner, String... mutableDirs) throws IOException {
         this.root = root;
 
         this.mutablePaths = new ArrayList<>();
         this.debug = debug;
         this.tinyFilesSize = tinyFilesSize;
-        this.interactive = interactive;
+        this.mode = mode;
 
         for (String mutableDir : mutableDirs) {
             Path resolved = root.resolve(mutableDir);
@@ -53,7 +61,7 @@ public class DedupAnalyzer {
     }
 
 
-    public void analyze() throws IOException {
+    void analyze() throws IOException {
         gatherFileData(root);
         execute();
         System.out.println("Total amount of bytes cleaned: " + humanReadableByteCount(numberBytesDeleted));
@@ -91,31 +99,69 @@ public class DedupAnalyzer {
         fileDB.forEach((key, dups) -> {
             if ((dups.size() > 1) && containsMutablePath(dups)) {
                 dups.sort(Comparator.comparing(o -> o.getPath().toAbsolutePath().toString()));
-                if (interactive) {
-                    System.out.println("Choose the version of the file to keep:");
-                    for (int i=0; i<dups.size(); i++) {
-                        FileInfo dup = dups.get(i);
-                        System.out.printf("\t%d) %s [%d]\n", i, dup.getPath(), dup.getSize());
-                    }
-                    System.out.printf("\t%d) SKIP\n", dups.size());
+                 switch (mode) {
 
-                    int answer = new Scanner(System.in).nextInt();
-                    if (answer > -1 && answer < dups.size()) {
-                        for (int i=0; i<dups.size(); i++) {
-                            if (i != answer) {
-                                deleteFile(dups.get(i), "duplicate");
-                            }
-                        }
-                    }
-                } else {
-                    FileInfo first = dups.get(0);
-                    System.out.printf("========\n%s [%d]\n", first.getPath().getFileName(), first.getSize());
-                    dups.forEach(fileInfo ->
-                            System.out.printf("\t%s\n", fileInfo.getPath().getParent().toAbsolutePath()));
-                    deleteDuplicates(dups);
+                     case InteractivePickFile:
+                         System.out.println("Choose the version of the file to keep:");
+                         for (int i=0; i<dups.size(); i++) {
+                             FileInfo dup = dups.get(i);
+                             System.out.printf("\t%d) %s [%d]\n", i, dup.getPath(), dup.getSize());
+                         }
+                         System.out.printf("\t%d) SKIP\n", dups.size());
+
+                         int answer = new Scanner(System.in).nextInt();
+                         if (answer > -1 && answer < dups.size()) {
+                             for (int i=0; i<dups.size(); i++) {
+                                 if (i != answer) {
+                                     deleteFile(dups.get(i), "duplicate");
+                                 }
+                             }
+                         }
+                         break;
+
+                     case InteractivePickDirectory:
+                         Set<Path> commonDirs = dups.stream()
+                                 .map(dup -> dup.getPath().getParent().toAbsolutePath())
+                                 .collect(Collectors.toSet());
+                         filesByCommonDirs.putIfAbsent(commonDirs, new HashSet<>());
+                         filesByCommonDirs.get(commonDirs).addAll(dups);
+                         break;
+
+                     case PickFirst:
+                         FileInfo first = dups.get(0);
+                         System.out.printf("========\n%s [%d]\n", first.getPath().getFileName(), first.getSize());
+                         dups.forEach(fileInfo ->
+                                 System.out.printf("\t%s\n", fileInfo.getPath().getParent().toAbsolutePath()));
+                         deleteDuplicates(dups);
+                         break;
                 }
             }
         });
+
+        // we have to do a second pass in this case
+        if (mode == InteractivePickDirectory) {
+            filesByCommonDirs.forEach((commonDirs,fileInfos) -> {
+                Set<String> uniqueFiles = fileInfos.stream().map(FileInfo::getKey).collect(Collectors.toSet());
+                System.out.println("Choose the directory where you want to keep the following files (" + uniqueFiles + "):");
+
+                List<Path> commonDirList = new ArrayList<>(commonDirs);
+                for (int index = 0; index < commonDirList.size(); index++) {
+                    System.out.printf("\t%d) %s\n", index, commonDirList.get(index));
+                }
+                System.out.printf("\t%d) SKIP\n", commonDirList.size());
+
+                int answer = new Scanner(System.in).nextInt();
+                if (answer > -1 && answer < commonDirs.size()) {
+                    Path keepDir = commonDirList.get(answer);
+                    for (FileInfo fileInfo : fileInfos) {
+                        // delete everything that doesn't start with keepDir
+                        if (!fileInfo.getPath().startsWith(keepDir)) {
+                            deleteFile(fileInfo, "duplicate");
+                        }
+                    }
+                }
+            });
+        }
     }
 
     private void deleteDuplicates(List<FileInfo> dups) {
@@ -132,14 +178,33 @@ public class DedupAnalyzer {
         }
     }
 
+    private boolean isDirectoryEmpty(final Path directory) {
+        try(DirectoryStream<Path> dirStream = Files.newDirectoryStream(directory)) {
+            return !dirStream.iterator().hasNext();
+        } catch (IOException e) {
+            log.error("Problem determining if directory is empty: " + directory, e);
+        }
+        return false;
+    }
+
     private void deleteFile(FileInfo fileInfo, String context) {
         try {
             if (Files.exists(fileInfo.getPath())) {
                 if (!debug) {
                     Files.delete(fileInfo.getPath());
                 }
-                System.out.printf("\t\tFile deleted: %s [%d]\n", fileInfo.getPath(), fileInfo.getSize());
+                System.out.printf("\t\tFile %sdeleted: %s [%d]\n",
+                        debug ? "would have been " : "", fileInfo.getPath(), fileInfo.getSize());
                 numberBytesDeleted += fileInfo.getSize();
+
+                Path parentDir = fileInfo.getPath().getParent();
+                if (isDirectoryEmpty(parentDir)) {
+                    if (!debug) {
+                        Files.delete(parentDir);
+                    }
+                    System.out.printf("\t\tEmpty directory %sdeleted: %s\n",
+                            debug ? "would have been " : "", parentDir);
+                }
             }
         } catch (Exception e) {
             log.error("problem deleting {} {} [{}]", context, fileInfo.getPath(), fileInfo.getSize(), e);
@@ -165,18 +230,19 @@ public class DedupAnalyzer {
     }
 
     private void gatherFileData(Path dir) throws IOException {
-        Stream<Path> list = Files.list(dir);
-        list.forEach(entry -> {
-            try {
-                if (Files.isDirectory(entry)) {
-                    gatherFileData(entry);
-                } else if (Files.isRegularFile(entry)) {
-                    addFile(entry);
+        try (Stream<Path> list = Files.list(dir)) {
+            list.forEach(entry -> {
+                try {
+                    if (Files.isDirectory(entry)) {
+                        gatherFileData(entry);
+                    } else if (Files.isRegularFile(entry)) {
+                        addFile(entry);
+                    }
+                } catch (Exception ex) {
+                    log.error("problem collecting file data", ex);
                 }
-            } catch (Exception ex) {
-                log.error("problem collecting file data", ex);
-            }
-        });
+            });
+        }
     }
 
     private void addFile(Path entry) throws IOException {

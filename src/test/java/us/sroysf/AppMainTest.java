@@ -61,7 +61,10 @@ public class AppMainTest {
 
         new AppMain(
                 new String[]{
-                        "-r", tempDirectory.toAbsolutePath().toString()},
+                        "-m", "PickFirst",
+                        "-r", tempDirectory.toAbsolutePath().toString(),
+                        "-e", tempDirectory.toAbsolutePath().toString()
+                },
                 () -> fail("exited")).run();
 
         assertFalse(Files.exists(dup1));
