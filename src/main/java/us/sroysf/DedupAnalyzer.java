@@ -9,6 +9,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -31,6 +32,7 @@ class DedupAnalyzer {
     private final List<FileInfo> tinyFiles = new ArrayList<>();
     private final boolean debug;
     private final Mode mode;
+    private final Scanner scanner;
 
     private final Path root;
     private final int tinyFilesSize;
@@ -44,6 +46,7 @@ class DedupAnalyzer {
 
     DedupAnalyzer(Path root, boolean debug, int tinyFilesSize, Mode mode, Scanner scanner, String... mutableDirs) throws IOException {
         this.root = root;
+        this.scanner = scanner;
 
         this.mutablePaths = new ArrayList<>();
         this.debug = debug;
@@ -109,7 +112,7 @@ class DedupAnalyzer {
                          }
                          System.out.printf("\t%d) SKIP\n", dups.size());
 
-                         int answer = new Scanner(System.in).nextInt();
+                         int answer = scanner.nextInt();
                          if (answer > -1 && answer < dups.size()) {
                              for (int i=0; i<dups.size(); i++) {
                                  if (i != answer) {
@@ -140,9 +143,12 @@ class DedupAnalyzer {
 
         // we have to do a second pass in this case
         if (mode == InteractivePickDirectory) {
+            AtomicInteger numDirectoriesToProcess = new AtomicInteger(filesByCommonDirs.size());
+            System.out.println("Buckle your seat beats folks. We have " + numDirectoriesToProcess.get() + " directories to process");
+
             filesByCommonDirs.forEach((commonDirs,fileInfos) -> {
-                Set<String> uniqueFiles = fileInfos.stream().map(FileInfo::getKey).collect(Collectors.toSet());
-                System.out.println("Choose the directory where you want to keep the following files (" + uniqueFiles + "):");
+                Set<String> uniqueFiles = fileInfos.stream().map(fi -> fi.getPath().getFileName() + " (" + humanReadableByteCount(fi.getSize()) + ")").collect(Collectors.toSet());
+                System.out.println("[" + numDirectoriesToProcess.getAndDecrement() + "] Choose the directory where you want to keep the following files (" + uniqueFiles + "):");
 
                 List<Path> commonDirList = new ArrayList<>(commonDirs);
                 for (int index = 0; index < commonDirList.size(); index++) {
@@ -150,12 +156,12 @@ class DedupAnalyzer {
                 }
                 System.out.printf("\t%d) SKIP\n", commonDirList.size());
 
-                int answer = new Scanner(System.in).nextInt();
+                int answer = scanner.nextInt();
                 if (answer > -1 && answer < commonDirs.size()) {
                     Path keepDir = commonDirList.get(answer);
                     for (FileInfo fileInfo : fileInfos) {
-                        // delete everything that doesn't start with keepDir
-                        if (!fileInfo.getPath().startsWith(keepDir)) {
+                        // delete all files that aren't in keepDir
+                        if (!keepDir.equals(fileInfo.getPath().getParent())) {
                             deleteFile(fileInfo, "duplicate");
                         }
                     }
@@ -205,6 +211,8 @@ class DedupAnalyzer {
                     System.out.printf("\t\tEmpty directory %sdeleted: %s\n",
                             debug ? "would have been " : "", parentDir);
                 }
+            } else {
+                log.debug("File doesn't exist: {}", fileInfo.getPath());
             }
         } catch (Exception e) {
             log.error("problem deleting {} {} [{}]", context, fileInfo.getPath(), fileInfo.getSize(), e);
@@ -230,18 +238,22 @@ class DedupAnalyzer {
     }
 
     private void gatherFileData(Path dir) throws IOException {
-        try (Stream<Path> list = Files.list(dir)) {
-            list.forEach(entry -> {
-                try {
-                    if (Files.isDirectory(entry)) {
-                        gatherFileData(entry);
-                    } else if (Files.isRegularFile(entry)) {
-                        addFile(entry);
+        if (Files.isReadable(dir)) {
+            try (Stream<Path> list = Files.list(dir)) {
+                list.forEach(entry -> {
+                    try {
+                        if (Files.isDirectory(entry)) {
+                            gatherFileData(entry);
+                        } else if (Files.isRegularFile(entry)) {
+                            addFile(entry);
+                        }
+                    } catch (Exception ex) {
+                        log.error("problem collecting file data", ex);
                     }
-                } catch (Exception ex) {
-                    log.error("problem collecting file data", ex);
-                }
-            });
+                });
+            }
+        } else {
+            log.debug("Directory isn't readable: {}", dir);
         }
     }
 
